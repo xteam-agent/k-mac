@@ -23,6 +23,18 @@ echo "  Fresh Mac Bootstrap"
 echo "========================================="
 echo ""
 
+# macOS 버전 확인 (Ventura 13.0 이상 권장)
+MACOS_VERSION=$(sw_vers -productVersion)
+MACOS_MAJOR=$(echo "$MACOS_VERSION" | cut -d. -f1)
+if [[ "$MACOS_MAJOR" -lt 13 ]]; then
+    warn "macOS $MACOS_VERSION 감지 — 이 스크립트는 Ventura(13.0) 이상을 권장합니다"
+    confirm "계속 진행하시겠습니까?" || exit 0
+else
+    info "macOS $MACOS_VERSION"
+fi
+
+echo ""
+
 # =========================================================
 # Phase 1: macOS System Settings (no dependencies)
 # =========================================================
@@ -74,18 +86,20 @@ echo "--- 키보드 리매핑 (한/영 전환) ---"
 echo ""
 
 # hidutil 스크립트 생성 (Right Command → F18, Caps Lock → Ctrl)
-sudo mkdir -p /Users/Shared/bin
-sudo tee /Users/Shared/bin/userkeymapping > /dev/null << 'SCRIPT'
+# sudo 없이 사용자 레벨로 설치 — SIP 충돌 방지
+mkdir -p ~/.local/bin
+cat > ~/.local/bin/userkeymapping << 'SCRIPT'
 #!/bin/bash
 hidutil property --set '{"UserKeyMapping":[
   {"HIDKeyboardModifierMappingSrc":0x7000000e7,"HIDKeyboardModifierMappingDst":0x70000006d},
   {"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x7000000e0}
 ]}'
 SCRIPT
-sudo chmod 755 /Users/Shared/bin/userkeymapping
+chmod 755 ~/.local/bin/userkeymapping
 
-# LaunchAgent
-sudo tee /Library/LaunchAgents/userkeymapping.plist > /dev/null << 'PLIST'
+# LaunchAgent (사용자 레벨)
+mkdir -p ~/Library/LaunchAgents
+cat > ~/Library/LaunchAgents/userkeymapping.plist << 'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -102,9 +116,9 @@ sudo tee /Library/LaunchAgents/userkeymapping.plist > /dev/null << 'PLIST'
 </plist>
 PLIST
 
-sudo launchctl bootout system /Library/LaunchAgents/userkeymapping.plist 2>/dev/null || true
-sudo launchctl bootstrap system /Library/LaunchAgents/userkeymapping.plist
-/Users/Shared/bin/userkeymapping > /dev/null 2>&1
+launchctl bootout "gui/$(id -u)" ~/Library/LaunchAgents/userkeymapping.plist 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/userkeymapping.plist
+~/.local/bin/userkeymapping > /dev/null 2>&1
 info "키 리매핑 완료 (Right Cmd → F18, Caps Lock → Ctrl)"
 
 # 입력 소스 전환 단축키 → F18
@@ -201,53 +215,93 @@ echo ""
 echo "--- 기본 앱 설치 ---"
 echo ""
 
+try_install() {
+    local label="$1"; shift
+    if "$@" 2>/dev/null; then
+        info "$label 설치 완료"
+    else
+        warn "$label 설치 실패 — 나중에 수동으로 설치하세요"
+    fi
+}
+
 # 브라우저
 if confirm "브라우저 설치? (Chrome)"; then
-    brew install --cask google-chrome 2>/dev/null || true
-    info "Chrome 설치 완료"
+    try_install "Chrome" brew install --cask google-chrome
 else
     warn "브라우저 설치 건너뜀"
 fi
 
 # 터미널
 if confirm "터미널 설치? (iTerm2)"; then
-    brew install --cask iterm2 2>/dev/null || true
-    info "iTerm2 설치 완료"
+    try_install "iTerm2" brew install --cask iterm2
 else
     warn "터미널 설치 건너뜀"
 fi
 
 # 개발 도구
 if confirm "개발 도구 설치? (GitHub CLI - gh)"; then
-    brew install gh 2>/dev/null || true
-    info "GitHub CLI (gh) 설치 완료"
+    try_install "GitHub CLI (gh)" brew install gh
 else
     warn "GitHub CLI 설치 건너뜀"
 fi
 
 # 런처
 if confirm "런처 설치? (Raycast)"; then
-    brew install --cask raycast 2>/dev/null || true
-    info "Raycast 설치 완료"
+    try_install "Raycast" brew install --cask raycast
 else
     warn "런처 설치 건너뜀"
 fi
 
 # AI 도구
 if confirm "AI 도구 설치? (Claude, Claude Code, ChatGPT, Codex, Gemini CLI)"; then
-    brew install --cask claude 2>/dev/null || true
-    brew install --cask claude-code 2>/dev/null || true
-    brew install --cask chatgpt 2>/dev/null || true
-    brew install --cask codex 2>/dev/null || true
-    brew install --cask codex-app 2>/dev/null || true
-    brew install gemini-cli 2>/dev/null || true
-    info "AI 도구 설치 완료"
+    try_install "Claude"      brew install --cask claude
+    try_install "Claude Code" brew install --cask claude-code
+    try_install "ChatGPT"     brew install --cask chatgpt
+    try_install "Codex (CLI)" brew install --cask codex
+    try_install "Codex (App)" brew install --cask codex-app
+    try_install "Gemini CLI"  brew install gemini-cli
 else
     warn "AI 도구 설치 건너뜀"
 fi
 
 echo ""
+
+# =========================================================
+# Phase 5: Git 기본 설정
+# =========================================================
+echo "--- Git 기본 설정 ---"
+echo ""
+
+if [[ -f "$HOME/.gitconfig" ]]; then
+    warn ".gitconfig 이미 존재함 — 건너뜀"
+else
+    read -rp "  이름 (git commit에 사용): " git_name
+    read -rp "  이메일 (회사 이메일 권장): " git_email
+    git config --global user.name "$git_name"
+    git config --global user.email "$git_email"
+    info "Git 설정 완료 ($git_name <$git_email>)"
+fi
+
+echo ""
+
+# =========================================================
+# Phase 6: GitHub CLI 인증
+# =========================================================
+if command -v gh &>/dev/null; then
+    echo "--- GitHub CLI 인증 ---"
+    echo ""
+    if gh auth status &>/dev/null; then
+        info "GitHub CLI 이미 인증됨"
+    else
+        echo "  GitHub 계정 연결이 필요합니다."
+        gh auth login
+    fi
+    echo ""
+fi
+
 echo "========================================="
 echo "  Bootstrap 완료!"
 echo "========================================="
+echo ""
+warn "키보드 리매핑 적용을 위해 재시작이 필요합니다"
 echo ""
